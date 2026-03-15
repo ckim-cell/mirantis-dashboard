@@ -2293,6 +2293,7 @@ function handleFileSelect(e) {
 
 
 // ══ ACCESS GATE ════════════════════════════════════════════════════
+// Uses JSONP pattern to bypass CORS — Apps Script supports callback param natively
 const PROXY_URL = 'https://script.google.com/macros/s/AKfycbydStlBDxOzIbqmrG-Pg6iCtLctdaZvtFQUSmZXYAtx7Q9IlTFNu-P__9fsba42H9aH/exec';
 
 function setGateMsg(msg, type) {
@@ -2305,6 +2306,37 @@ function setGateMsg(msg, type) {
 function setReqMsg(msg) {
   const el = document.getElementById('request-msg');
   if (el) el.textContent = msg;
+}
+
+// JSONP helper — injects a <script> tag to call Apps Script, bypassing CORS
+function jsonpCall(url, callbackName) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('Request timed out. Please try again.'));
+    }, 15000);
+
+    function cleanup() {
+      delete window[callbackName];
+      const el = document.getElementById('jsonp-' + callbackName);
+      if (el) el.remove();
+      clearTimeout(timeout);
+    }
+
+    window[callbackName] = function(data) {
+      cleanup();
+      resolve(data);
+    };
+
+    const script = document.createElement('script');
+    script.id = 'jsonp-' + callbackName;
+    script.src = url + '&callback=' + callbackName;
+    script.onerror = function() {
+      cleanup();
+      reject(new Error('Could not reach the server. Check your internet connection.'));
+    };
+    document.head.appendChild(script);
+  });
 }
 
 async function checkAccess() {
@@ -2321,24 +2353,13 @@ async function checkAccess() {
   setGateMsg('⟳ Verifying access...', 'loading');
 
   try {
+    const cbName = 'cb_check_' + Date.now();
     const url = PROXY_URL + '?action=check&email=' + encodeURIComponent(email);
-    const resp = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
-      mode: 'cors',
-      credentials: 'omit',
-      headers: { 'Content-Type': 'text/plain' }
-    });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const text = await resp.text();
-    let data;
-    try { data = JSON.parse(text); }
-    catch(e) { throw new Error('Invalid response from server: ' + text.slice(0,100)); }
+    const data = await jsonpCall(url, cbName);
 
     if (data.authorized) {
       setGateMsg('✓ Access granted. Loading data...', 'success');
       sessionStorage.setItem('gate_email', email);
-      // Reveal dashboard, hide gate
       setTimeout(() => {
         const overlay = document.getElementById('access-gate-overlay');
         if (overlay) overlay.style.display = 'none';
@@ -2349,15 +2370,11 @@ async function checkAccess() {
     } else {
       setGateMsg('✗ ' + (data.message || 'Access denied.'), 'error');
       btn.disabled = false;
-      // Show request access panel
       const panel = document.getElementById('request-access-panel');
       if (panel) panel.style.display = 'block';
-      // Pre-fill email in request panel
-      const reqBtn = document.getElementById('req-btn');
-      if (reqBtn) reqBtn.dataset.email = email;
     }
   } catch(err) {
-    setGateMsg('✗ Could not reach server: ' + err.message, 'error');
+    setGateMsg('✗ ' + err.message, 'error');
     btn.disabled = false;
   }
 }
@@ -2373,23 +2390,13 @@ async function requestAccess() {
   setReqMsg('⟳ Sending request...');
 
   try {
+    const cbName = 'cb_request_' + Date.now();
     const url = PROXY_URL + '?action=request&email=' + encodeURIComponent(email);
-    const resp = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
-      mode: 'cors',
-      credentials: 'omit',
-      headers: { 'Content-Type': 'text/plain' }
-    });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const text = await resp.text();
-    let data;
-    try { data = JSON.parse(text); }
-    catch(e) { throw new Error('Invalid response: ' + text.slice(0,100)); }
+    const data = await jsonpCall(url, cbName);
     setReqMsg(data.message || '✓ Request sent! The admin has been notified.');
     reqBtn.textContent = '✓ Request Sent';
   } catch(err) {
-    setReqMsg('✗ Could not send request: ' + err.message);
+    setReqMsg('✗ ' + err.message);
     reqBtn.disabled = false;
   }
 }
